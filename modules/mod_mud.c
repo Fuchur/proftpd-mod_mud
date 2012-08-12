@@ -217,7 +217,7 @@ static int get_msg(pool *pool, char *type, char **result, int quick)
             if (!inet_ntop(pr_netaddr_get_family(&from_addr),
                            pr_netaddr_get_inaddr(&from_addr),
                            buf, sizeof(buf))) {
-                strncpy(buf, "???", sizeof(buf));
+                sstrncpy(buf, "???", sizeof(buf));
             }
             pr_log_debug(DEBUG1, "mod_mud: Packet from %s:%hd ignored",
                          buf, ntohs(pr_netaddr_get_port(&from_addr)));
@@ -271,18 +271,18 @@ static int send_msg(pool *pool, char **result, char *type,
     }
 
     ++udp_seqnumber;
-    sprintf(buf, "NFTPD\t%ld\tREQ\t%s", udp_seqnumber, type);
+    snprintf(buf, sizeof(buf), "NFTPD\t%ld\tREQ\t%s", udp_seqnumber, type);
     if (NULL != arg1) {
-        strcat(buf, "\t");
-        strcat(buf, arg1);
+        sstrcat(buf, "\t", sizeof(buf));
+        sstrcat(buf, arg1, sizeof(buf));
     }
     if (NULL != arg2) {
-        strcat(buf, "\t");
-        strcat(buf, arg2);
+        sstrcat(buf, "\t", sizeof(buf));
+        sstrcat(buf, arg2, sizeof(buf));
     }
     if (NULL != arg3) {
-        strcat(buf, "\t");
-        strcat(buf, arg3);
+        sstrcat(buf, "\t", sizeof(buf));
+        sstrcat(buf, arg3, sizeof(buf));
     }
 
     len = strlen(buf);
@@ -327,7 +327,7 @@ static struct mudpw *getmudpw(pool *pool, char *name)
     save->pw.pw_shell = NULL;
     save->pw_level = -1;
 
-    strncpy(save->pw.pw_name, name, 14);
+    sstrncpy(save->pw.pw_name, name, 15);
 
     if (!send_msg(pool, &result, "USER", name, NULL, NULL)) {
         if (!strncasecmp("NONE", result, 4)) {
@@ -335,9 +335,9 @@ static struct mudpw *getmudpw(pool *pool, char *name)
             return NULL;
         }
 
-        strncpy(save->pw_rdir, result, sizeof(save->pw_rdir)-1);
-        strncpy(save->pw.pw_dir, save->pw_rdir, MAXPATHLEN);
-        strncpy(save->pw.pw_passwd, "dummy", 25);
+        sstrncpy(save->pw_rdir, result, sizeof(save->pw_rdir));
+        sstrncpy(save->pw.pw_dir, save->pw_rdir, MAXPATHLEN+1);
+        sstrncpy(save->pw.pw_passwd, "dummy", 26);
         return save;
     }
 
@@ -467,7 +467,7 @@ static int mud_setup_environment(pool *p, char *user, char *pass)
     if (authcode != 0 || !(mud_login & MU_AUTHENTICATED))
         return 0;
 
-    strncpy(session.cwd, pw->pw.pw_dir, PR_TUNABLE_PATH_MAX);
+    sstrncpy(session.cwd, pw->pw.pw_dir, PR_TUNABLE_PATH_MAX);
 
     log_auth(LOG_NOTICE, "mod_mud: FTP login as '%s' from %s [%s] to %s:%i",
              user, session.c->remote_name,
@@ -545,8 +545,8 @@ static int mud_setup_environment(pool *p, char *user, char *pass)
         /* NOT REACHED */
     }
 
-    strncpy(session.cwd, pr_fs_getcwd(), sizeof(session.cwd));
-    strncpy(session.vwd, pr_fs_getvwd(), sizeof(session.vwd));
+    sstrncpy(session.cwd, pr_fs_getcwd(), sizeof(session.cwd));
+    sstrncpy(session.vwd, pr_fs_getvwd(), sizeof(session.vwd));
 
     /* check dynamic configuration */
     if (pr_fsio_stat("/", &sbuf) != -1)
@@ -665,25 +665,22 @@ static char *mud_getdir(cmd_rec *cmd)
         dir = cmd->arg;
 
     if (!strncmp(dir, "+", 1)) {
-        strncpy(target, "/d/", 4);
-        strncat(target, dir+1, MAXPATHLEN-2);
-        target[MAXPATHLEN-1] = 0;
+        sstrncpy(target, "/d/", sizeof(target));
+        sstrcat(target, dir+1, sizeof(target));
         dir = target;
         cmd->arg = target;
     }
     else if (!strncmp(dir, "~/", 2)) {
-        strncpy(target, "/players/", 10);
+        sstrncpy(target, "/players/", sizeof(target));
         user = (char *)get_param_ptr(cmd->server->conf, C_USER, FALSE);
-        strcat(target, user);
-        strncat(target, dir+1, MAXPATHLEN-strlen(user)-8);
-        target[MAXPATHLEN-1] = 0;
+        sstrcat(target, user, sizeof(target));
+        sstrcat(target, dir+1, sizeof(target));
         dir = target;
         cmd->arg = target;
     }
     else if (!strncmp(dir, "~", 1)) {
-        strncpy(target, "/players/", 10);
-        strncat(target, dir+1, MAXPATHLEN-8);
-        target[MAXPATHLEN-1] = 0;
+        sstrncpy(target, "/players/", sizeof(target));
+        sstrcat(target, dir+1, sizeof(target));
         dir = target;
         cmd->arg = target;
     }

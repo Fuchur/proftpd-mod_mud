@@ -721,7 +721,7 @@ static char *mud_getdir( cmd_rec *cmd )
 MODRET mud_set_udpport( cmd_rec *cmd )
 {
     int portno;
-    int *portno_ptr;
+    config_rec *c;
 
     CHECK_ARGS( cmd, 1 );
     CHECK_CONF( cmd, CONF_ROOT|CONF_GLOBAL );
@@ -730,12 +730,9 @@ MODRET mud_set_udpport( cmd_rec *cmd )
     if ( portno < 1024 )
         CONF_ERROR( cmd, "UDPPortno must be greater than 1024." );
 
-    if (NULL == (portno_ptr = pcalloc(main_server->pool, sizeof(int))))
-        return ERROR(cmd);
-
-    *portno_ptr = portno;
-
-    add_config_param( "UDPPortno", 1, (void *)portno_ptr );
+    c = add_config_param( "UDPPortno", 1, NULL );
+    c->argv[0] = pcalloc(c->pool, sizeof(int));
+    *((int *)c->argv[0]) = portno;
     udp_portno = portno;
 
     return HANDLED(cmd);

@@ -1,12 +1,15 @@
 /*
  * mod_mud.c: mud-user login&file access handling
  *
- * @author Woody@SilberLand
+ * @author Holger@Wunderland
+ * @author Wolfgang Hamann, wolfgang@blitzstrahl
  * @author Tiamak@MorgenGrauen
  * @author Matthias L. Jugel, MorgenGrauen
  * @author Peng@FinalFrontier (original)
  *
- * $Id: mod_mud.c,v 1.1.1.1 1999/12/12 17:54:59 mud Exp $
+ * v1.6
+ *
+ * $Id$
  */
 
 #include "conf.h"
@@ -40,8 +43,10 @@
 #define MODE_WRITE         2
 #define MODE_LIST          4
 
-
-//extern int core_display_file(const char *,const char *);
+#if 0
+#undef int core_display_file
+extern int core_display_file(const char *,const char *);
+#endif
 
 extern module auth_module;
 static int    udp_socket;           /* Our udp socket, -1 if inactive */
@@ -60,7 +65,7 @@ module mud_module;
 
 /* Declarations */
 
-static int mud_init();
+static int mud_sess_init();
 static char *sgetsave(char *);
 static int get_msg ( char *, char **, int );
 static int send_msg ( char **, char *, char *, char *, char * );
@@ -71,7 +76,6 @@ static int mud_setup_environment( pool *, char *, char * );
 static int mud_verify_access( char *, int );
 static char *mud_getdir( cmd_rec * );
 
-MODRET mud_set_mudaddr( cmd_rec * );
 MODRET mud_set_udpport( cmd_rec * );
 MODRET mud_set_pathmudlib( cmd_rec * );
 MODRET pw_auth( cmd_rec * );
@@ -80,53 +84,50 @@ MODRET mud_cmd_read( cmd_rec * );
 MODRET mud_cmd_write( cmd_rec * );
 
 
-static int mud_init()
+static int mud_sess_init()
 {
     struct group *grp = NULL;
     struct passwd *pw = NULL;
     char *mudgroupname = NULL;
-    config_rec *c = NULL;
-    int *tmp;
 
-    muduser = (char *)get_param_ptr( main_server->conf, "UserName", FALSE );
-    mudgroupname = (char *)get_param_ptr( main_server->conf, "GroupName",
+    muduser = (char *)get_param_ptr( main_server->conf, "MudUserName", FALSE );
+    mudgroupname = (char *)get_param_ptr( main_server->conf, "MudGroupName",
                                           FALSE );
-    tmp = get_param_ptr( main_server->conf, "UDPPort", FALSE );
-    udp_portno = *tmp;
-    pr_log_debug( DEBUG9, "mod_mud::mud_init: UDPPort is %d", udp_portno);
 
+    udp_portno = get_param_int( main_server->conf, "UDPPortno", FALSE );
+ 
     if ( udp_portno < 1024 ){
-        pr_log_debug( DEBUG1, "mod_mud: UDPPort must be set.");
+        pr_log_debug( DEBUG1, "mod_mud: UDPPortno must be set.");
         end_login(1);
         return 0;
     }
 
     if ( (pw = getpwnam(muduser)) == NULL){
         endpwent();
-        pr_response_add( R_451, "Internal server error, giving up." ); 
+        pr_response_add_err( R_451, "Internal server error, giving up." ); 
         end_login(1);
         return 0;
     }
-    
+
     if ( (muduserpw = malloc(sizeof (struct passwd))) != NULL )
         memcpy( muduserpw, pw, sizeof(struct passwd) );
     else{
-        pr_response_add( R_451, "Internal server error, giving up." );
+        pr_response_add_err( R_451, "Internal server error, giving up." );
         end_login(1);
         return 0;
     }
 
     if ( (grp = getgrnam(mudgroupname)) == NULL ){
         endgrent();
-        pr_response_add( R_451, "Internal server error, giving up." ); 
+        pr_response_add_err( R_451, "Internal server error, giving up." );
         end_login(1);
         return 0;
     }
-    
+
     if ( (mudgroup = malloc(sizeof (struct group))) != NULL )
         memcpy( mudgroup, grp, sizeof(struct group) );
     else{
-        pr_response_add( R_451, "Internal server error, giving up." );
+        pr_response_add_err( R_451, "Internal server error, giving up." );
         end_login(1);
         return 0;
     }
@@ -135,22 +136,7 @@ static int mud_init()
     
     memset( (char *)&gd_addr, 0, sizeof(gd_addr) );
     gd_addr.sin_family = AF_INET;
-    // gd_addr.sin_addr = session.c->local_addr->na_addr.v4.sin_addr;
-
-    if ((c = find_config(main_server->conf, CONF_PARAM, "MudAddress",
-        FALSE)) != NULL)
-    {
-      char *addr;
-      addr = (char *) pr_netaddr_get_ipstr(c->argv[0]);
-      pr_log_debug( DEBUG9, "mod_mud: MUD running on address %s", addr);
-      pr_inet_pton(AF_INET, addr, &gd_addr.sin_addr);
-    }
-    else
-    {
-      pr_log_debug( DEBUG9, "mod_mud: MUD running on localhost");
-      pr_inet_pton(AF_INET, "127.0.0.1", &gd_addr.sin_addr);
-    }
-
+    gd_addr.sin_addr = *(struct in_addr *)pr_netaddr_get_inaddr(session.c->local_addr);
     gd_addr.sin_port = htons(udp_portno);
     udp_seqnumber = 0;
 
@@ -159,7 +145,7 @@ static int mud_init()
                    "mod_mud: Cannot open and receive socket for UDP-Mode." );
         end_login(1);
     }
-    
+
   return 0;
 }
 
@@ -169,7 +155,7 @@ static char *sgetsave(char *s)
     char *new = (char *)malloc( (unsigned) strlen(s) + 1 );
   
     if ( new == NULL ){
-        pr_response_add_err( R_421, "Local resource failure: malloc" );
+         pr_response_add_err( R_421, "Local resource failure: malloc." );
         end_login(1);
         /* NOTREACHED */
     }
@@ -180,8 +166,7 @@ static char *sgetsave(char *s)
 
 static int get_msg ( char *type, char **result, int quick )
 {
-    int retries, discard, rc, tlen;
-    socklen_t fromlen;
+    int retries, discard, rc, fromlen, tlen;
     struct timeval timeout;
     fd_set readfds;
     struct sockaddr_in from_addr;
@@ -236,9 +221,8 @@ static int get_msg ( char *type, char **result, int quick )
 
         if ( memcmp( &from_addr.sin_addr, &gd_addr.sin_addr,
                      sizeof(gd_addr.sin_addr) ) ){
-            pr_log_debug( DEBUG1, "mod_mud: Packet from %s:%hd ignored, expecting from: %s:%hd",
-                       inet_ntoa(from_addr.sin_addr), ntohs(from_addr.sin_port),
-                       inet_ntoa(gd_addr.sin_addr), ntohs(gd_addr.sin_port) );
+            pr_log_debug( DEBUG1, "mod_mud: Packet from %s:%hd ignored",
+                       inet_ntoa(from_addr.sin_addr), from_addr.sin_port );
             retries--;
             continue;
         }
@@ -390,7 +374,7 @@ static void build_group_arrays( pool *p, struct passwd *xpw, char *name,
     }
 
     if ( !pw ){
-        pw = pr_auth_getpwnam( p, name );
+        pw = auth_getpwnam( p, name );
 
         if ( !pw ){
             *gids = xgids;
@@ -399,12 +383,12 @@ static void build_group_arrays( pool *p, struct passwd *xpw, char *name,
         }
     }
 
-    if ( (gr = pr_auth_getgrgid( p, pw->pw_gid )) != NULL )
+    if ( (gr = auth_getgrgid( p, pw->pw_gid )) != NULL )
         *((char**) push_array(xgroups)) = pstrdup( p, gr->gr_name );
 
-    pr_auth_setgrent(p);
+    auth_setgrent(p);
 
-    while ( (gr = pr_auth_getgrent(p)) != NULL && gr->gr_mem )
+    while ( (gr = auth_getgrent(p)) != NULL && gr->gr_mem )
         for ( gr_mem = gr->gr_mem; *gr_mem; gr_mem++ ){
             if ( !strcmp( *gr_mem, pw->pw_name ) ){
                 *((int*) push_array(xgids)) = (int) gr->gr_gid;
@@ -414,6 +398,29 @@ static void build_group_arrays( pool *p, struct passwd *xpw, char *name,
                 break;
             }
         }
+
+    *gids = xgids;
+    *groups = xgroups;
+}
+
+// at this point, unix passwords have gone
+static void build_dummy_group_arrays( pool *p, struct passwd *xpw, char *name,
+                                array_header **gids, array_header **groups )
+{
+    struct passwd *pw = xpw;
+    array_header *xgids, *xgroups;
+
+    xgids = make_array( p, 2, sizeof(int) );
+    xgroups = make_array( p, 2, sizeof(char*) );
+
+    if ( !pw && !name ){
+        *gids = xgids;
+        *groups = xgroups;
+        return;
+    }
+
+	*((int*) push_array(xgids)) = 300;
+	*((char**) push_array(xgroups)) = pstrdup( p, "games" );
 
     *gids = xgids;
     *groups = xgroups;
@@ -432,32 +439,32 @@ static int mud_setup_environment( pool *p, char *user, char *pass )
     session.hide_password = TRUE;
 
     if ( (pw = getmudpw(user)) == NULL ){
-        log_pri( PR_LOG_NOTICE, "mod_mud: failed login, can't find user '%s'",
+        log_pri( LOG_NOTICE, "mod_mud: failed login, can't find user '%s'",
                  user );
         return 0;
     }
 
-    authcode = pr_auth_authenticate( p, user, pass );
+    authcode = auth_authenticate( p, user, pass );
 
     session.user = pstrdup( p, user );
     session.group = pstrdup( p, mudgroup->gr_name );
 
     switch(authcode){
     case PR_AUTH_NOPWD:
-        log_auth( PR_LOG_NOTICE,
+        log_auth( LOG_NOTICE,
                   "mod_mud: USER %s: no such user found from %s [%s] to %s:%i",
                   user, session.c->remote_name,
-                  pr_netaddr_get_ipstr( session.c->remote_addr ),
-                  pr_netaddr_get_ipstr( session.c->local_addr ),
+					pr_netaddr_get_ipstr(session.c->remote_addr),
+					pr_netaddr_get_ipstr(session.c->local_addr),
                   session.c->local_port );
         break;
         
     case PR_AUTH_BADPWD:
-        log_auth( PR_LOG_NOTICE,
+        log_auth( LOG_NOTICE,
                   "mod_mud: USER %s: incorrect password from %s [%s] to %s:%i",
                   user, session.c->remote_name,
-                  pr_netaddr_get_ipstr( session.c->remote_addr ),
-                  pr_netaddr_get_ipstr( session.c->local_addr ),
+                    pr_netaddr_get_ipstr(session.c->remote_addr),
+                    pr_netaddr_get_ipstr(session.c->local_addr),
                   session.c->local_port );
         break;
     };
@@ -465,12 +472,12 @@ static int mud_setup_environment( pool *p, char *user, char *pass )
     if ( authcode != 0 || !(mud_login & MU_AUTHENTICATED) )
         return 0;
     
-    strncpy( session.cwd, pw->pw.pw_dir, MAXPATHLEN );
+    strncpy( session.cwd, pw->pw.pw_dir, PR_TUNABLE_PATH_MAX );
 
-    log_auth( PR_LOG_NOTICE, "mod_mud: FTP login as '%s' from %s [%s] to %s:%i",
+    log_auth( LOG_NOTICE, "mod_mud: FTP login as '%s' from %s [%s] to %s:%i",
               user, session.c->remote_name,
-              pr_netaddr_get_ipstr( session.c->remote_addr ),
-              pr_netaddr_get_ipstr( session.c->local_addr ),
+                    pr_netaddr_get_ipstr(session.c->remote_addr),
+                    pr_netaddr_get_ipstr(session.c->local_addr),
               session.c->local_port );
     
     /* Now check to see if the user has an applicable DefaultRoot */
@@ -483,8 +490,9 @@ static int mud_setup_environment( pool *p, char *user, char *pass )
 
             PRIVS_RELINQUISH;
 
-            pr_response_add_err( R_530, "Unable to set default root directory." );
-            log_pri( PR_LOG_ERR, "mod_mud: %s chroot(\"%s\"): %s", session.user,
+         pr_response_add_err( R_530, "Unable to set default root directory." );
+
+            log_pri( LOG_ERR, "mod_mud: %s chroot(\"%s\"): %s", session.user,
                      defroot, strerror(errno) );
             end_login(1);
         }
@@ -492,8 +500,9 @@ static int mud_setup_environment( pool *p, char *user, char *pass )
         PRIVS_RELINQUISH;
     }
     else{
-        pr_response_add_err( R_530, "Mud root directory is not set." );
-        log_pri( PR_LOG_ERR, "mod_mud: %s mud-chroot(\"%s\"): %s", session.user,
+         pr_response_add_err( R_530, "Mud root directory is not seT." ); 
+
+        log_pri( LOG_ERR, "mod_mud: %s mud-chroot(\"%s\"): %s", session.user,
                  defroot, strerror(errno) );
         end_login(1);
     }
@@ -519,7 +528,7 @@ static int mud_setup_environment( pool *p, char *user, char *pass )
         PRIVS_RELINQUISH;
 
         pr_response_add_err( R_530, "Unable to set user privileges." );
-        log_pri( PR_LOG_ERR, "mod_mud: %s setregid() or setreuid(): %s",
+        log_pri( LOG_ERR, "mod_mud: %s setregid() or setreuid(): %s",
                  session.user, strerror(errno) );
 
         end_login(1);
@@ -532,7 +541,7 @@ static int mud_setup_environment( pool *p, char *user, char *pass )
 
     if ( pr_fsio_chdir_canon( session.cwd, 1 ) == -1 ){
         pr_response_add_err( R_530, "Unable to chdir." );
-        log_pri( PR_LOG_ERR, "mod_mud: %s chdir(\"%s\"): %s", session.user,
+        log_pri( LOG_ERR, "mod_mud: %s chdir(\"%s\"): %s", session.user,
                  session.cwd, strerror(errno) );
         end_login(1);
     }
@@ -552,25 +561,39 @@ static int mud_setup_environment( pool *p, char *user, char *pass )
  
     /* Authentication complete, user logged in */
 
-    /* log_run_address( session.c->remote_name, session.c->remote_addr );
-    log_run_cwd(session.cwd); */
-    /* Aus mod_auth.c geklaut, da wurde das log_run auch zu dem: */
+//  pr_scoreboard_update_entry(getpid(),
+//    PR_SCORE_USER, session.user,
+//    PR_SCORE_CWD, session.cwd,
+//    NULL);
 
-    /* Update the scoreboard entry */
-    pr_scoreboard_update_entry(getpid(),
-    PR_SCORE_USER, session.user,
-    PR_SCORE_CWD, session.cwd,
-    NULL);
-
+//    log_run_address( session.c->remote_name, session.c->remote_ipaddr );
+//    log_run_cwd(session.cwd);
     session_set_idle();
-    pr_timer_remove( PR_TIMER_LOGIN, &auth_module );
+    remove_timer( TIMER_LOGIN, &auth_module );
 
-    session.user = pstrdup( permanent_pool, session.user );
-    session.group = pstrdup( permanent_pool, session.group );
+  session.user = pstrdup(permanent_pool,session.user);
 
-    build_group_arrays( session.pool, &pw->pw, NULL,
+  if (session.group)
+    session.group = pstrdup(permanent_pool,session.group);
+   pr_log_debug( DEBUG1, "mod_mud: make groups." );
+#if 1
+//    build_group_arrays( session.pool, &pw->pw, NULL,
+//                        &session.gids, &session.groups );
+    build_dummy_group_arrays( session.pool, &pw->pw, NULL,
                         &session.gids, &session.groups );
+#else
+  if (session.gids)
+    session.gids = copy_array(permanent_pool, session.gids);
 
+  /* session.groups is an array of strings, so we must copy the string data
+   * as well as the pointers.
+   */
+  session.groups = copy_array_str(permanent_pool, session.groups);
+
+  /* Resolve any deferred-resolution paths in the FS layer */
+  pr_resolve_fs_map();
+#endif
+   pr_log_debug( DEBUG1, "mod_mud: end setup." );
     return 1;
 }
 
@@ -646,7 +669,7 @@ static char *mud_getdir( cmd_rec *cmd )
         dir = target;
         cmd->arg = target;
     }
-    else if ( !strncmp( dir, "~/", 2 ) || !strncmp( dir, "~", 2) ){
+    else if ( !strncmp( dir, "~/", 2 ) ){
         strncpy( target, "/players/", 10 );
         user = (char*)get_param_ptr( cmd->server->conf, C_USER, FALSE );
         strcat( target, user );
@@ -670,47 +693,21 @@ static char *mud_getdir( cmd_rec *cmd )
 }
 
 
-MODRET mud_set_mudaddr(cmd_rec *cmd)
-{
-  config_rec *c = NULL;
-  pr_netaddr_t *mud_addr = NULL;
-
-  CHECK_ARGS( cmd, 1 );
-  CHECK_CONF( cmd, CONF_ROOT|CONF_GLOBAL );
-
-  /* We can only send UDP packets to one address, so we don't care if the
-   * given name might map to multiple addresses.
-   */
-  mud_addr = pr_netaddr_get_addr(cmd->server->pool, cmd->argv[1], NULL);
-  if (mud_addr == NULL)
-    return PR_ERROR_MSG(cmd, NULL, pstrcat(cmd->tmp_pool, cmd->argv[0],
-      ": unable to resolve \"", cmd->argv[1], "\"", NULL));
-
-  c = add_config_param(cmd->argv[0], 2, (void *) mud_addr, NULL);
-  c->argv[1] = pstrdup(c->pool, cmd->argv[1]);
-
-  return PR_HANDLED(cmd);
-}
-
-
 MODRET mud_set_udpport( cmd_rec *cmd )
 {
     int _portno;
-    config_rec *c = NULL;
-
+    
     CHECK_ARGS( cmd, 1 );
     CHECK_CONF( cmd, CONF_ROOT|CONF_GLOBAL );
     _portno = atoi(cmd->argv[1]);
     
     if ( _portno < 1024 )
-        CONF_ERROR( cmd, "UDPPort must be greater than 1024." );
+        CONF_ERROR( cmd, "UDPPortno must be greater than 1024." );
 
-    c = add_config_param_str( "UDPPort", 1, NULL );
-    c->argv[0] = pcalloc(c->pool, sizeof(int));
-    *((int *) c->argv[0]) = _portno;
+    add_config_param( "UDPPortno", 1, (void *)_portno );
     udp_portno = _portno;
-
-    return PR_HANDLED(cmd);
+    
+    return HANDLED(cmd);
 }
 
 
@@ -740,7 +737,33 @@ MODRET mud_set_pathmudlib( cmd_rec *cmd )
 
     add_config_param_str( "PathMudlib", 1, dir );
 
-    return PR_HANDLED(cmd);
+    return HANDLED(cmd);
+}
+
+MODRET mud_set_muduser( cmd_rec *cmd )
+{	char *user;
+
+    CHECK_CONF( cmd, CONF_ROOT|CONF_VIRTUAL|CONF_GLOBAL );
+    CHECK_ARGS( cmd, 1 );
+
+    user = cmd->argv[1];
+
+    add_config_param_str( "MudUserName", 1, user );
+
+    return HANDLED(cmd);
+}
+
+MODRET mud_set_mudgroup( cmd_rec *cmd )
+{	char *group;
+
+    CHECK_CONF( cmd, CONF_ROOT|CONF_VIRTUAL|CONF_GLOBAL );
+    CHECK_ARGS( cmd, 1 );
+
+    group = cmd->argv[1];
+
+    add_config_param_str( "MudGroupName", 1, group );
+
+    return HANDLED(cmd);
 }
 
 
@@ -755,24 +778,24 @@ MODRET pw_auth( cmd_rec *cmd )
 
     if ( !(mud_login & MU_AUTH_INTERNAL) )
         /* shortcut */
-        return PR_DECLINED(cmd);
+        return DECLINED(cmd);
  
     if ( !send_msg( &result, "PASS", (char *)name, (char *)clearpw, NULL ) ){
         if ( !strncasecmp( result, "OK", 2 ) ){
             free(result);
             /* mud-user identified */
             mud_login |= MU_AUTHENTICATED;
-            return PR_HANDLED(cmd);
+            return HANDLED(cmd);
         }
             
         pr_log_debug( DEBUG1, "mod_mud: auth pw(%s) rejected by udp", name );
         free(result);
-        return PR_DECLINED(cmd);
+        return DECLINED(cmd);
     }
     
     pr_log_debug( DEBUG1, "mod_mud: pw_auth(): no udp connection" );
 
-    return PR_DECLINED(cmd);
+    return DECLINED(cmd);
 }
 
 
@@ -780,12 +803,13 @@ MODRET mud_cmd_pass( cmd_rec *cmd )
 {
     char *display = NULL;
     char *user, *grantmsg;
+	unsigned char *authenticated;
+    config_rec *c = NULL;
     int res = 0;
-    unsigned char *authenticated;
 
-    authenticated = get_param_ptr( cmd->server->conf, "authenticated", FALSE);
-    if ( authenticated && *authenticated == TRUE )
-        return PR_ERROR_MSG(cmd, R_503, _("You are already logged in"));
+	authenticated = get_param_ptr(main_server->conf, "authenticated", FALSE);
+    if (authenticated && (*authenticated != FALSE))
+        return ERROR_MSG( cmd, R_503, "You are already logged in!" );
 
     user = (char*)get_param_ptr( cmd->server->conf, C_USER, FALSE );
 
@@ -796,37 +820,32 @@ MODRET mud_cmd_pass( cmd_rec *cmd )
     mud_login |= MU_AUTH_INTERNAL;
     
     if ( (res = mud_setup_environment( cmd->tmp_pool, user, cmd->arg )) ){
-        
-	config_rec *c = NULL; 
-	
-	c = add_config_param_set(&cmd->server->conf, "authenticated", 1, NULL);
-	c->argv[0] = pcalloc(c->pool, sizeof(unsigned char));
-	*((unsigned char *) c->argv[0]) = TRUE;
+	    c = add_config_param_set(&cmd->server->conf, "authenticated", 1, NULL);
+ 	   c->argv[0] = pcalloc(c->pool, sizeof(unsigned char));
+	    *((unsigned char *) c->argv[0]) = TRUE;
 
-        /*
+	    set_auth_check(NULL);
         display = (char*)get_param_ptr( cmd->server->conf, "DisplayLogin",
                                         FALSE );
 
         if ( display )
-            pr_display_file( display, NULL, R_230);
+            pr_display_file( R_230, display, NULL );
 
         if ( (grantmsg = (char*)get_param_ptr( cmd->server->conf,
                                                "AccessGrantMsg", FALSE) )
              != NULL){
             grantmsg = sreplace( cmd->tmp_pool, grantmsg, "%u", user, NULL );
-            pr_response_add( R_230, "%s", grantmsg);
+            pr_response_add( R_230, "%s", grantmsg );
         } 
         else
             pr_response_add( R_230, "User %s logged in.", user );
-        */
-
-        return PR_HANDLED(cmd);
+        return HANDLED(cmd);
     }
 
     /* user is not a mud-user. try external identification */
     mud_login &= ~MU_AUTH_INTERNAL;
     
-    return PR_DECLINED(cmd);
+    return DECLINED(cmd);
 }
 
 
@@ -836,7 +855,7 @@ MODRET mud_cmd_read( cmd_rec *cmd )
     
     if ( !(mud_login & MU_AUTHENTICATED) )
         /* not our job */
-        return PR_DECLINED(cmd);
+        return DECLINED(cmd);
     
     pr_log_debug( DEBUG5, "mod_mud: mud_cmd_read" );
 
@@ -848,7 +867,7 @@ MODRET mud_cmd_read( cmd_rec *cmd )
     if ( !mud_verify_access(dir, MODE_READ) )
         return ERROR(cmd);
   
-    return PR_DECLINED(cmd);
+    return DECLINED(cmd);
 }
 
 
@@ -858,7 +877,7 @@ MODRET mud_cmd_write( cmd_rec *cmd )
 
     if ( !(mud_login & MU_AUTHENTICATED) )
         /* not our job */
-        return PR_DECLINED(cmd);
+        return DECLINED(cmd);
     
     pr_log_debug( DEBUG5, "mod_mud: mud_cmd_write" );
 
@@ -870,7 +889,7 @@ MODRET mud_cmd_write( cmd_rec *cmd )
     if ( !mud_verify_access(dir, MODE_WRITE) )
         return ERROR(cmd);
   
-    return PR_DECLINED(cmd);
+    return DECLINED(cmd);
 }
 
 
@@ -880,7 +899,7 @@ MODRET mud_cmd_list( cmd_rec *cmd )
 
     if ( !(mud_login & MU_AUTHENTICATED) )
         /* not our job */
-        return PR_DECLINED(cmd);
+        return DECLINED(cmd);
     
     pr_log_debug( DEBUG5, "mod_mud: mud_cmd_list" );
 
@@ -892,26 +911,169 @@ MODRET mud_cmd_list( cmd_rec *cmd )
     if ( !mud_verify_access(dir, MODE_LIST) )
         return ERROR(cmd);
   
-    return PR_DECLINED(cmd);
+    return DECLINED(cmd);
 }
 
+/* sendline() now has an internal buffer, to help speed up LIST output. */
+static int sendline(char *fmt, ...) {
+  static char listbuf[PR_TUNABLE_BUFFER_SIZE] = {'\0'};
+  va_list msg;
+  char buf[PR_TUNABLE_BUFFER_SIZE+1] = {'\0'};
+  int res = 0;
 
-static conftable mud_conftab[] = {
-    { "PathMudlib", mud_set_pathmudlib, NULL },
-    { "MudAddress", mud_set_mudaddr,    NULL },
-    { "UDPPortno",  mud_set_udpport,    NULL },
-    { NULL,         NULL,               NULL }
+  /* A NULL fmt argument is the signal to flush the buffer */
+  if (!fmt) {
+    if ((res = pr_data_xfer(listbuf, strlen(listbuf))) < 0)
+      pr_log_debug(DEBUG3, "pr_data_xfer returned %d, error = %s.", res,
+        strerror(PR_NETIO_ERRNO(session.d->outstrm)));
+
+    memset(listbuf, '\0', sizeof(listbuf));
+    return res;
+  }
+
+  va_start(msg, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, msg);
+  va_end(msg);
+
+  buf[sizeof(buf)-1] = '\0';
+
+  /* If buf won't fit completely into listbuf, flush listbuf */
+  if (strlen(buf) >= (sizeof(listbuf) - strlen(listbuf))) {
+    if ((res = pr_data_xfer(listbuf, strlen(listbuf))) < 0)
+      pr_log_debug(DEBUG3, "pr_data_xfer returned %d, error = %s.", res,
+        strerror(PR_NETIO_ERRNO(session.d->outstrm)));
+
+    memset(listbuf, '\0', sizeof(listbuf));
+  }
+
+  sstrcat(listbuf, buf, sizeof(listbuf));
+  return res;
+}
+
+MODRET mud_cmd_reallist( cmd_rec *cmd )
+{
+	char *result = NULL;
+	int lines, len;
+	char *dir = (cmd->argc > 1) ? cmd->argv[1] : session.cwd;
+
+    if ( !(mud_login & MU_AUTHENTICATED) )
+        /* not our job */
+        return DECLINED(cmd);
+
+	if(send_msg(&result, "LIST", session.user, dir, NULL)) {
+		pr_response_add(R_550, "Error retrieving dirlist '%s'.", dir);
+		return ERROR(cmd);
+	}
+
+	lines = 0;
+	while(!XFER_ABORTED) {
+		if (!strncasecmp(result, "OK", 2))
+			break;
+		if (strncasecmp("LINE", result, 4) 
+			|| (result[4] != '\0' && result[4] != '\t'))
+		{
+			pr_log_debug(DEBUG1, "mod_mud: recvd |%s|", result);
+			pr_response_add(R_550, "Error retrieving dirlist '%s'.", dir);
+			break;
+		}
+		len = strlen(result+4);
+	
+  		/* If the data connection isn't open, open it now. */
+
+		if ((session.sf_flags & SF_XFER) == 0) {
+			if (pr_data_open(NULL, "file list", PR_NETIO_IO_WR, 0) < 0) {
+				pr_data_reset();
+				return ERROR(cmd);
+			}
+
+			session.sf_flags |= SF_ASCII_OVERRIDE;
+		}
+		// we can use sendline(fmt, ....)
+		sendline("%s", result+5);
+		lines++;
+		free(result);
+		if (get_msg("LIST", &result, 0)) {
+			pr_response_add(R_550, "Error retrieving dirlist for '%s', timeout", dir);
+			break;
+		}
+	}	
+	if (!XFER_ABORTED) {
+		sendline(NULL);
+	}
+	free(result);
+
+	if (XFER_ABORTED) {
+		pr_data_abort(0, 0);
+    	return ERROR(cmd);
+
+	} else if (session.sf_flags & SF_XFER) {
+		pr_data_close(FALSE);
+	}
+	return HANDLED(cmd);
+}
+
+// AUTH functions
+
+MODRET mud_getgrgid( cmd_rec *cmd )
+{
+	static struct group xgroup;
+	pr_log_debug( DEBUG1, "mod_mud: getgrgid() called" );
+	xgroup.gr_gid = 300;
+	xgroup.gr_name = "games";
+	xgroup.gr_passwd = "x";
+	xgroup.gr_mem = 0;
+	return mod_create_data(cmd, &xgroup);
+	return DECLINED(cmd);
+}
+
+MODRET mud_getgroups( cmd_rec *cmd )
+{
+	array_header *gids = NULL, *groups = NULL;
+	if(mudgroup)
+	{	
+	  if(cmd->argv[1])
+		{	
+		  gids = (array_header *) cmd->argv[1];
+		  
+		  if(gids)
+        *((gid_t *) push_array(gids)) = mudgroup->gr_gid;
+		}
+		if(cmd->argv[2])
+		{	
+		  groups = (array_header *) cmd->argv[2];
+		  
+		  if(groups)
+        *((char **) push_array(groups)) = mudgroup->gr_name;
+		}
+  if (gids && gids->nelts > 0)
+    return mod_create_data(cmd, (void *) &gids->nelts);
+
+  else if (groups && groups->nelts > 0)
+    return mod_create_data(cmd, (void *) &groups->nelts);
+	}
+	return DECLINED(cmd);
+}
+
+static conftable mud_config[] = {
+	{ "MudUserName",  mud_set_muduser,    NULL },
+	{ "MudGroupName", mud_set_mudgroup,   NULL },
+    { "PathMudlib",   mud_set_pathmudlib, NULL },
+    { "UDPPortno",    mud_set_udpport,    NULL },
+    { NULL,           NULL,               NULL }
 };
 
 
 static authtable mud_auth[] = {
     { 0, "auth", pw_auth },
+    { 0, "getgroups", mud_getgroups },
+    { 0, "getgrgid", mud_getgrgid },
     { 0, NULL }
 };
 
 
-cmdtable mud_cmdtab[] = {
+cmdtable mud_commands[] = {
     { CMD,     C_PASS,  G_NONE,  mud_cmd_pass,   FALSE, FALSE, CL_AUTH },
+/* check whether the operations are allowed */
     { PRE_CMD, C_NLST,  G_DIRS,  mud_cmd_list,   TRUE,  FALSE, CL_AUTH },
     { PRE_CMD, C_LIST,  G_DIRS,  mud_cmd_list,   TRUE,  FALSE, CL_AUTH },
     { PRE_CMD, C_STAT,  G_DIRS,  mud_cmd_read,   TRUE,  FALSE, CL_AUTH },
@@ -931,16 +1093,33 @@ cmdtable mud_cmdtab[] = {
     { PRE_CMD, C_DELE,  G_WRITE, mud_cmd_write,  TRUE,  FALSE, CL_AUTH },
     { PRE_CMD, C_RNFR,  G_DIRS,  mud_cmd_write,  TRUE,  FALSE, CL_AUTH },
     { PRE_CMD, C_RNTO,  G_WRITE, mud_cmd_write,  TRUE,  FALSE, CL_AUTH },
+/* retrieve dir listing */
+/*    { CMD,     C_LIST,  G_DIRS,  mud_cmd_reallist,TRUE, FALSE, CL_AUTH }, */
     { 0, NULL }
 };
 
 
 module mud_module = {
-    NULL, NULL,     /* Always NULL */
-    0x20,           /* API Version 2.0 */
-    "mud",
-    mud_conftab,    /* Configuration directive table */
-    mud_cmdtab,     /* Command handler */
-    mud_auth,       /* Authentication handler */
-    NULL, mud_init  /* Initialization function */
+  NULL, NULL,
+
+  /* Module API version */
+  0x20,
+
+  /* Module name */
+  "mud",
+
+  /* Module configuration handler table */
+  mud_config,
+
+  /* Module command handler table */
+  mud_commands,
+
+  /* Module authentication handler table */
+  mud_auth,
+
+  /* Module initialization */
+  NULL,
+
+  /* Session initialization */
+  mud_sess_init
 };

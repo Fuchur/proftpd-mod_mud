@@ -47,18 +47,10 @@
 extern int core_display_file(const char *,const char *);
 #endif
 
-union sockaddr_X  {
-    struct sockaddr sa;
-    struct sockaddr_in v4;
-#ifdef PR_USE_IPV6
-    struct sockaddr_in6 v6;
-#endif
-};
-
 extern module auth_module;
 static int    udp_socket;           /* Our udp socket, -1 if inactive */
 static long   udp_seqnumber;        /* The message id-number */
-static union sockaddr_X gd_addr;  /* The address of the gamedriver */
+static pr_netaddr_t gd_addr;        /* The address of the gamedriver */
 static int    udp_portno = 0;
 static int    udp_retries = UDP_RETRIES;
 static int    udp_delay = UDP_DELAY;
@@ -145,34 +137,14 @@ static int mud_sess_init()
 
     udp_socket = -1;
 
-    memset( (char *)&gd_addr, 0, sizeof(gd_addr) );
-
-    gd_addr.sa.sa_family = pr_netaddr_get_family(session.c->local_addr);
-
-    switch (gd_addr.sa.sa_family) {
-    case AF_INET:
-        gd_addr.v4.sin_addr = *(struct in_addr *)
-            pr_netaddr_get_inaddr(session.c->local_addr);
-        gd_addr.v4.sin_port = htons(udp_portno);
-        break;
-#ifdef PR_USE_IPV6
-    case AF_INET6:
-        gd_addr.v6.sin6_addr = *(struct in6_addr *)
-            pr_netaddr_get_inaddr(session.c->local_addr);
-        gd_addr.v6.sin6_port = htons(udp_portno);
-        break;
-#endif
-    default:
-        pr_log_debug( DEBUG1, "mod_mud: Unknown address family %d.",
-                      gd_addr.sa.sa_family );
-        end_login(1);
-        return 0;
-    }
+    memcpy( &gd_addr, session.c->local_addr, sizeof(gd_addr) );
+    pr_netaddr_set_port( &gd_addr, htons(udp_portno) );
     udp_seqnumber = 0;
 
-    if ( (udp_socket = socket( gd_addr.sa.sa_family, SOCK_DGRAM, 0 )) < 0 ) {
+    if ( (udp_socket = socket( pr_netaddr_get_family( &gd_addr ),
+                               SOCK_DGRAM, 0 )) < 0 ) {
         pr_log_debug( DEBUG1,
-                    "mod_mud: Cannot open and receive socket for UDP-Mode." );
+                   "mod_mud: Cannot open and receive socket for UDP-Mode." );
         end_login(1);
         return 0;
     }
@@ -201,7 +173,7 @@ static int get_msg ( char *type, char **result, int quick )
     socklen_t fromlen;
     struct timeval timeout;
     fd_set readfds;
-    union sockaddr_X from_addr;
+    pr_netaddr_t from_addr;
     char buf[8192], *rest;
 
     if ( udp_socket < 0 ) {
@@ -236,9 +208,14 @@ static int get_msg ( char *type, char **result, int quick )
             continue;
         }
 
-        fromlen = sizeof(from_addr);
-        rc = recvfrom( udp_socket, buf, 8192, 0, (struct sockaddr *)&from_addr,
-                       &fromlen );
+        memset( &from_addr, 0, sizeof(from_addr) );
+
+        /* the socket was created with gd_addr's family. */
+        pr_netaddr_set_family( &from_addr,
+                               pr_netaddr_get_family( &gd_addr ) );
+        fromlen = pr_netaddr_get_sockaddr_len( &gd_addr );
+        rc = recvfrom( udp_socket, buf, 8192, 0,
+                       pr_netaddr_get_sockaddr( &from_addr ), &fromlen );
         if ( rc <= 0 ) {
             if ( rc < 0 )
                 pr_log_debug( DEBUG1, "mod_mud: recvfrom() failed: %m" );
@@ -251,38 +228,18 @@ static int get_msg ( char *type, char **result, int quick )
         if ( rc < 8192 )
             buf[rc] = '\0';
 
-        switch (gd_addr.sa.sa_family) {
-        case AF_INET:
-            if ( memcmp( &from_addr.v4.sin_addr, &gd_addr.v4.sin_addr,
-                         sizeof(gd_addr.v4.sin_addr) ) ) {
-                pr_log_debug( DEBUG1, "mod_mud: Packet from %s:%hd ignored",
-                              inet_ntoa(from_addr.v4.sin_addr),
-                              from_addr.v4.sin_port );
-                retries--;
-                continue;
+        if ( memcmp( pr_netaddr_get_inaddr( &gd_addr ),
+                     pr_netaddr_get_inaddr( &from_addr ),
+                     pr_netaddr_get_inaddr_len( &gd_addr )) ) {
+            if ( !inet_ntop( pr_netaddr_get_family( &from_addr ),
+                             pr_netaddr_get_inaddr( &from_addr ),
+                             buf, sizeof(buf) ) ) {
+                strncpy(buf, "???", sizeof(buf));
             }
-            break;
-#ifdef PR_USE_IPV6
-        case AF_INET6:
-            if ( memcmp( &from_addr.v6.sin6_addr, &gd_addr.v6.sin6_addr,
-                         sizeof(gd_addr.v6.sin6_addr) ) ) {
-                if ( inet_ntop( from_addr.v6.sin6_family,
-                                &from_addr.v6.sin6_addr,
-                                buf,
-                                sizeof(buf) ) ) {
-                    pr_log_debug( DEBUG1,
-                                  "mod_mud: Packet from %s:%hd ignored",
-                                  buf, from_addr.v6.sin6_port);
-                } else { 
-                    pr_log_debug( DEBUG1,
-                                  "mod_mud: Packet from ??:%hd ignored",
-                                  from_addr.v6.sin6_port);
-                }
-                retries--;
-                continue;
-            }
-            break;
-#endif
+            pr_log_debug( DEBUG1, "mod_mud: Packet from %s:%hd ignored",
+                          buf, pr_netaddr_get_port( &from_addr ) );
+            retries--;
+            continue;
         }
 
         pr_log_debug( DEBUG1, "mod_mud: get_msg(): recvd |%s|", buf );
@@ -351,8 +308,9 @@ static int send_msg ( char **result, char *type, char *arg1, char *arg2,
         pr_log_debug( DEBUG4, "mod_mud: send_msg(): sending |%s|", buf );
 
     for ( retries = udp_retries; retries > 0; retries--) {
-        rc = sendto( udp_socket, buf, len, 0, (struct sockaddr *)&gd_addr,
-                     sizeof(gd_addr));
+        rc = sendto( udp_socket, buf, len, 0,
+                     pr_netaddr_get_sockaddr( &gd_addr ),
+                     pr_netaddr_get_sockaddr_len( &gd_addr ) );
         if ( rc != len ) {
             if ( rc < 0 )
                 pr_log_debug( DEBUG1, "mod_mud: sendto() failed:%m" );

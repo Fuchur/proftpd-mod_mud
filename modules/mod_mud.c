@@ -47,10 +47,18 @@
 extern int core_display_file(const char *,const char *);
 #endif
 
+union sockaddr_X  {
+    struct sockaddr sa;
+    struct sockaddr_in v4;
+#ifdef PR_USE_IPV6
+    struct sockaddr_in6 v6;
+#endif
+};
+
 extern module auth_module;
 static int    udp_socket;           /* Our udp socket, -1 if inactive */
 static long   udp_seqnumber;        /* The message id-number */
-static struct sockaddr_in gd_addr;  /* The address of the gamedriver */
+static union sockaddr_X gd_addr;  /* The address of the gamedriver */
 static int    udp_portno = 0;
 static int    udp_retries = UDP_RETRIES;
 static int    udp_delay = UDP_DELAY;
@@ -138,15 +146,35 @@ static int mud_sess_init()
     udp_socket = -1;
 
     memset( (char *)&gd_addr, 0, sizeof(gd_addr) );
-    gd_addr.sin_family = AF_INET;
-    gd_addr.sin_addr = *(struct in_addr *)pr_netaddr_get_inaddr(session.c->local_addr);
-    gd_addr.sin_port = htons(udp_portno);
+
+    gd_addr.sa.sa_family = pr_netaddr_get_family(session.c->local_addr);
+
+    switch (gd_addr.sa.sa_family) {
+    case AF_INET:
+        gd_addr.v4.sin_addr = *(struct in_addr *)
+            pr_netaddr_get_inaddr(session.c->local_addr);
+        gd_addr.v4.sin_port = htons(udp_portno);
+        break;
+#ifdef PR_USE_IPV6
+    case AF_INET6:
+        gd_addr.v6.sin6_addr = *(struct in6_addr *)
+            pr_netaddr_get_inaddr(session.c->local_addr);
+        gd_addr.v6.sin6_port = htons(udp_portno);
+        break;
+#endif
+    default:
+        pr_log_debug( DEBUG1, "mod_mud: Unknown address family %d.",
+                      gd_addr.sa.sa_family );
+        end_login(1);
+        return 0;
+    }
     udp_seqnumber = 0;
 
-    if ( (udp_socket = socket( AF_INET, SOCK_DGRAM, 0 )) < 0 ) {
+    if ( (udp_socket = socket( gd_addr.sa.sa_family, SOCK_DGRAM, 0 )) < 0 ) {
         pr_log_debug( DEBUG1,
-                   "mod_mud: Cannot open and receive socket for UDP-Mode." );
+                    "mod_mud: Cannot open and receive socket for UDP-Mode." );
         end_login(1);
+        return 0;
     }
 
     return 0;
@@ -173,7 +201,7 @@ static int get_msg ( char *type, char **result, int quick )
     socklen_t fromlen;
     struct timeval timeout;
     fd_set readfds;
-    struct sockaddr_in from_addr;
+    union sockaddr_X from_addr;
     char buf[8192], *rest;
 
     if ( udp_socket < 0 ) {
@@ -223,12 +251,38 @@ static int get_msg ( char *type, char **result, int quick )
         if ( rc < 8192 )
             buf[rc] = '\0';
 
-        if ( memcmp( &from_addr.sin_addr, &gd_addr.sin_addr,
-                     sizeof(gd_addr.sin_addr) ) ) {
-            pr_log_debug( DEBUG1, "mod_mud: Packet from %s:%hd ignored",
-                       inet_ntoa(from_addr.sin_addr), from_addr.sin_port );
-            retries--;
-            continue;
+        switch (gd_addr.sa.sa_family) {
+        case AF_INET:
+            if ( memcmp( &from_addr.v4.sin_addr, &gd_addr.v4.sin_addr,
+                         sizeof(gd_addr.v4.sin_addr) ) ) {
+                pr_log_debug( DEBUG1, "mod_mud: Packet from %s:%hd ignored",
+                              inet_ntoa(from_addr.v4.sin_addr),
+                              from_addr.v4.sin_port );
+                retries--;
+                continue;
+            }
+            break;
+#ifdef PR_USE_IPV6
+        case AF_INET6:
+            if ( memcmp( &from_addr.v6.sin6_addr, &gd_addr.v6.sin6_addr,
+                         sizeof(gd_addr.v6.sin6_addr) ) ) {
+                if ( inet_ntop( from_addr.v6.sin6_family,
+                                &from_addr.v6.sin6_addr,
+                                buf,
+                                sizeof(buf) ) ) {
+                    pr_log_debug( DEBUG1,
+                                  "mod_mud: Packet from %s:%hd ignored",
+                                  buf, from_addr.v6.sin6_port);
+                } else { 
+                    pr_log_debug( DEBUG1,
+                                  "mod_mud: Packet from ??:%hd ignored",
+                                  from_addr.v6.sin6_port);
+                }
+                retries--;
+                continue;
+            }
+            break;
+#endif
         }
 
         pr_log_debug( DEBUG1, "mod_mud: get_msg(): recvd |%s|", buf );

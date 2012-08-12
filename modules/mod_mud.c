@@ -926,6 +926,7 @@ MODRET mud_cmd_list( cmd_rec *cmd )
     return DECLINED(cmd);
 }
 
+#if 0
 /* sendline() now has an internal buffer, to help speed up LIST output. */
 static int sendline(char *fmt, ...) {
     static char listbuf[PR_TUNABLE_BUFFER_SIZE] = {'\0'};
@@ -1023,6 +1024,7 @@ MODRET mud_cmd_reallist( cmd_rec *cmd )
         }
         return HANDLED(cmd);
 }
+#endif
 
 // AUTH functions
 

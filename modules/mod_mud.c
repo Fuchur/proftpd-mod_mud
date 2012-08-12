@@ -709,7 +709,7 @@ MODRET mud_set_udpport(cmd_rec *cmd)
     *((int *)c->argv[0]) = portno;
     udp_portno = portno;
 
-    return HANDLED(cmd);
+    return PR_HANDLED(cmd);
 }
 
 
@@ -738,7 +738,7 @@ MODRET mud_set_pathmudlib(cmd_rec *cmd)
 
     add_config_param_str("PathMudlib", 1, dir);
 
-    return HANDLED(cmd);
+    return PR_HANDLED(cmd);
 }
 
 MODRET mud_set_muduser(cmd_rec *cmd)
@@ -751,7 +751,7 @@ MODRET mud_set_muduser(cmd_rec *cmd)
 
     add_config_param_str("MudUserName", 1, user);
 
-    return HANDLED(cmd);
+    return PR_HANDLED(cmd);
 }
 
 MODRET mud_set_mudgroup(cmd_rec *cmd)
@@ -764,7 +764,7 @@ MODRET mud_set_mudgroup(cmd_rec *cmd)
 
     add_config_param_str("MudGroupName", 1, group);
 
-    return HANDLED(cmd);
+    return PR_HANDLED(cmd);
 }
 
 
@@ -779,23 +779,23 @@ MODRET pw_auth(cmd_rec *cmd)
 
     if (!(mud_login & MU_AUTH_INTERNAL))
         /* shortcut */
-        return DECLINED(cmd);
+        return PR_DECLINED(cmd);
 
     if (!send_msg(cmd->tmp_pool, &result, "PASS",
                   (char *)name, (char *)clearpw, NULL)) {
         if (!strncasecmp(result, "OK", 2)) {
             /* mud-user identified */
             mud_login |= MU_AUTHENTICATED;
-            return HANDLED(cmd);
+            return PR_HANDLED(cmd);
         }
 
         pr_log_debug(DEBUG1, "mod_mud: auth pw(%s) rejected by udp", name);
-        return DECLINED(cmd);
+        return PR_DECLINED(cmd);
     }
 
     pr_log_debug(DEBUG1, "mod_mud: pw_auth(): no udp connection");
 
-    return DECLINED(cmd);
+    return PR_DECLINED(cmd);
 }
 
 
@@ -828,13 +828,13 @@ MODRET mud_cmd_pass(cmd_rec *cmd)
 
         set_auth_check(NULL);
 
-        return HANDLED(cmd);
+        return PR_HANDLED(cmd);
     }
 
     /* user is not a mud-user. try external identification */
     mud_login &= ~MU_AUTH_INTERNAL;
 
-    return DECLINED(cmd);
+    return PR_DECLINED(cmd);
 }
 
 
@@ -844,19 +844,19 @@ MODRET mud_cmd_read(cmd_rec *cmd)
 
     if (!(mud_login & MU_AUTHENTICATED))
         /* not our job */
-        return DECLINED(cmd);
+        return PR_DECLINED(cmd);
 
     pr_log_debug(DEBUG5, "mod_mud: mud_cmd_read");
 
     if ((dir = mud_getdir(cmd)) == NULL) {
         pr_response_add_err(R_550, "Could not resolve '%s'.", cmd->arg);
-        return ERROR(cmd);
+        return PR_ERROR(cmd);
     }
 
     if (!mud_verify_access(cmd->tmp_pool, dir, MODE_READ))
-        return ERROR(cmd);
+        return PR_ERROR(cmd);
 
-    return DECLINED(cmd);
+    return PR_DECLINED(cmd);
 }
 
 
@@ -866,19 +866,19 @@ MODRET mud_cmd_write(cmd_rec *cmd)
 
     if (!(mud_login & MU_AUTHENTICATED))
         /* not our job */
-        return DECLINED(cmd);
+        return PR_DECLINED(cmd);
 
     pr_log_debug(DEBUG5, "mod_mud: mud_cmd_write");
 
     if ((dir = mud_getdir(cmd)) == NULL) {
         pr_response_add_err(R_550, "Could not resolve '%s'.", cmd->arg);
-        return ERROR(cmd);
+        return PR_ERROR(cmd);
     }
 
     if (!mud_verify_access(cmd->tmp_pool, dir, MODE_WRITE))
-        return ERROR(cmd);
+        return PR_ERROR(cmd);
 
-    return DECLINED(cmd);
+    return PR_DECLINED(cmd);
 }
 
 
@@ -888,19 +888,19 @@ MODRET mud_cmd_list(cmd_rec *cmd)
 
     if (!(mud_login & MU_AUTHENTICATED))
         /* not our job */
-        return DECLINED(cmd);
+        return PR_DECLINED(cmd);
 
     pr_log_debug(DEBUG5, "mod_mud: mud_cmd_list");
 
     if ((dir = mud_getdir(cmd)) == NULL) {
         pr_response_add_err(R_550, "Could not resolve '%s'.", cmd->arg);
-        return ERROR(cmd);
+        return PR_ERROR(cmd);
     }
 
     if (!mud_verify_access(cmd->tmp_pool, dir, MODE_LIST))
-        return ERROR(cmd);
+        return PR_ERROR(cmd);
 
-    return DECLINED(cmd);
+    return PR_DECLINED(cmd);
 }
 
 #if 0
@@ -948,11 +948,11 @@ MODRET mud_cmd_reallist(cmd_rec *cmd)
 
     if (!(mud_login & MU_AUTHENTICATED))
         /* not our job */
-        return DECLINED(cmd);
+        return PR_DECLINED(cmd);
 
     if (send_msg(cmd->tmp_pool, &result, "LIST", session.user, dir, NULL)) {
         pr_response_add(R_550, "Error retrieving dirlist '%s'.", dir);
-        return ERROR(cmd);
+        return PR_ERROR(cmd);
     }
 
     lines = 0;
@@ -973,7 +973,7 @@ MODRET mud_cmd_reallist(cmd_rec *cmd)
         if ((session.sf_flags & SF_XFER) == 0) {
             if (pr_data_open(NULL, "file list", PR_NETIO_IO_WR, 0) < 0) {
                 pr_data_reset();
-                return ERROR(cmd);
+                return PR_ERROR(cmd);
             }
 
             session.sf_flags |= SF_ASCII_OVERRIDE;
@@ -993,13 +993,13 @@ MODRET mud_cmd_reallist(cmd_rec *cmd)
 
     if (XFER_ABORTED) {
         pr_data_abort(0, 0);
-        return ERROR(cmd);
+        return PR_ERROR(cmd);
 
     }
     else if (session.sf_flags & SF_XFER) {
         pr_data_close(FALSE);
     }
-    return HANDLED(cmd);
+    return PR_HANDLED(cmd);
 }
 #endif
 
@@ -1014,7 +1014,7 @@ MODRET mud_getgrgid(cmd_rec *cmd)
     xgroup.gr_passwd = "x";
     xgroup.gr_mem = 0;
     return mod_create_data(cmd, &xgroup);
-    return DECLINED(cmd);
+    return PR_DECLINED(cmd);
 }
 
 MODRET mud_getgroups(cmd_rec *cmd)
@@ -1042,7 +1042,7 @@ MODRET mud_getgroups(cmd_rec *cmd)
         else if (groups && groups->nelts > 0)
             return mod_create_data(cmd, (void *) &groups->nelts);
     }
-    return DECLINED(cmd);
+    return PR_DECLINED(cmd);
 }
 
 static conftable mud_config[] = {

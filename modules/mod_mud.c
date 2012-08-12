@@ -237,7 +237,7 @@ static int get_msg ( char *type, char **result, int quick )
                 strncpy(buf, "???", sizeof(buf));
             }
             pr_log_debug( DEBUG1, "mod_mud: Packet from %s:%hd ignored",
-                          buf, pr_netaddr_get_port( &from_addr ) );
+                          buf, ntohs( pr_netaddr_get_port( &from_addr ) ) );
             retries--;
             continue;
         }

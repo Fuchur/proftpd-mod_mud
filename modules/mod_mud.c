@@ -96,8 +96,15 @@ static int mud_sess_init()
     mudgroupname = (char *)get_param_ptr( main_server->conf, "MudGroupName",
                                           FALSE );
 
+    if (muduser == NULL || mudgroupname == NULL) {
+        pr_log_debug( DEBUG1,
+                      "mod_mud: MudUserName and MudGroupName must be set.");
+        end_login(1);
+        return 0;
+    }
+
     udp_portno_ptr = get_param_ptr( main_server->conf, "UDPPortno", FALSE );
-    udp_portno = udp_portno_ptr ? *udp_portno_ptr : 0;
+    udp_portno = udp_portno_ptr == 0 ? 0 : *udp_portno_ptr;
 
     if ( udp_portno < 1024 ) {
         pr_log_debug( DEBUG1, "mod_mud: UDPPortno must be set.");
@@ -518,7 +525,7 @@ static int mud_setup_environment( pool *p, char *user, char *pass )
         PRIVS_RELINQUISH;
     }
     else {
-         pr_response_add_err( R_530, "Mud root directory is not seT." );
+        pr_response_add_err( R_530, "Mud root directory is not set." );
 
         log_pri( LOG_ERR, "mod_mud: %s mud-chroot(\"%s\"): %s", session.user,
                  defroot, strerror(errno) );
@@ -827,11 +834,11 @@ MODRET mud_cmd_pass( cmd_rec *cmd )
 {
     char *display = NULL;
     char *user, *grantmsg;
-        unsigned char *authenticated;
+    unsigned char *authenticated;
     config_rec *c = NULL;
     int res = 0;
 
-        authenticated = get_param_ptr(main_server->conf, "authenticated", FALSE);
+    authenticated = get_param_ptr(main_server->conf, "authenticated", FALSE);
     if (authenticated && (*authenticated != FALSE))
         return ERROR_MSG( cmd, R_503, "You are already logged in!" );
 

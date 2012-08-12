@@ -801,10 +801,8 @@ MODRET pw_auth(cmd_rec *cmd)
 
 MODRET mud_cmd_pass(cmd_rec *cmd)
 {
-    char *display = NULL;
-    char *user, *grantmsg;
+    char *user;
     unsigned char *authenticated;
-    config_rec *c = NULL;
     int res = 0;
 
     authenticated = (unsigned char *)
@@ -820,26 +818,16 @@ MODRET mud_cmd_pass(cmd_rec *cmd)
     /* shortcut for pw_auth */
     mud_login |= MU_AUTH_INTERNAL;
 
-    if ((res = mud_setup_environment(cmd->tmp_pool, user, cmd->arg))) {
+    res = mud_setup_environment(cmd->tmp_pool, user, cmd->arg);
+    if (res == 1) {
+        config_rec *c = NULL;
+
         c = add_config_param_set(&cmd->server->conf, "authenticated", 1, NULL);
         c->argv[0] = pcalloc(c->pool, sizeof(unsigned char));
         *((unsigned char *) c->argv[0]) = TRUE;
 
         set_auth_check(NULL);
-        display = (char *)
-            get_param_ptr(cmd->server->conf, "DisplayLogin", FALSE);
 
-        if (display)
-            pr_display_file(display, NULL, R_230, 0);
-
-        grantmsg = (char *)
-            get_param_ptr(cmd->server->conf, "AccessGrantMsg", FALSE);
-        if (grantmsg != NULL) {
-            grantmsg = sreplace(cmd->tmp_pool, grantmsg, "%u", user, NULL);
-            pr_response_add(R_230, "%s", grantmsg);
-        }
-        else
-            pr_response_add(R_230, "User %s logged in.", user);
         return HANDLED(cmd);
     }
 

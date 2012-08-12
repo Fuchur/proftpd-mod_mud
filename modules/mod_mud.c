@@ -672,7 +672,7 @@ static char *mud_getdir(cmd_rec *cmd)
     }
     else if (!strncmp(dir, "~/", 2)) {
         sstrncpy(target, "/players/", sizeof(target));
-        user = (char *)get_param_ptr(cmd->server->conf, C_USER, FALSE);
+        user = pr_table_get(session.notes, "mod_auth.orig-user", FALSE);
         sstrcat(target, user, sizeof(target));
         sstrcat(target, dir+1, sizeof(target));
         dir = target;
@@ -810,12 +810,12 @@ MODRET mud_cmd_pass(cmd_rec *cmd)
     authenticated = (unsigned char *)
         get_param_ptr(main_server->conf, "authenticated", FALSE);
     if (authenticated && (*authenticated != FALSE))
-        return ERROR_MSG(cmd, R_503, "You are already logged in!");
+        return PR_ERROR_MSG(cmd, R_503, "You are already logged in!");
 
-    user = (char *)get_param_ptr(cmd->server->conf, C_USER, FALSE);
+    user = pr_table_get(session.notes, "mod_auth.orig-user", FALSE);
 
     if (!user)
-        return ERROR_MSG(cmd, R_503, "Login with USER first.");
+        return PR_ERROR_MSG(cmd, R_503, "Login with USER first.");
 
     /* shortcut for pw_auth */
     mud_login |= MU_AUTH_INTERNAL;

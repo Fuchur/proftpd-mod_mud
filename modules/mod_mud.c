@@ -65,16 +65,15 @@ module mud_module;
 /* Declarations */
 
 static int mud_sess_init();
-static char *sgetsave(char *);
-static int get_msg ( char *, char **, int );
-static int send_msg ( char **, char *, char *, char *, char * );
-static struct mudpw *getmudpw( char * );
+static int get_msg(pool *, char *, char **, int);
+static int send_msg(pool *, char **, char *, char *, char *, char *);
+static struct mudpw *getmudpw(pool *, char *);
 #if 0
 static void build_group_arrays( pool *, struct passwd *, char *,
                                 array_header **, array_header ** );
 #endif
 static int mud_setup_environment( pool *, char *, char * );
-static int mud_verify_access( char *, int );
+static int mud_verify_access(pool *, char *, int);
 static char *mud_getdir( cmd_rec * );
 
 MODRET mud_set_udpport( cmd_rec * );
@@ -119,13 +118,8 @@ static int mud_sess_init()
         return 0;
     }
 
-    if ( (muduserpw = malloc(sizeof (struct passwd))) != NULL )
-        memcpy( muduserpw, pw, sizeof(struct passwd) );
-    else {
-        pr_response_add_err( R_451, "Internal server error, giving up." );
-        end_login(1);
-        return 0;
-    }
+    muduserpw = palloc(session.pool, sizeof(struct passwd));
+    memcpy(muduserpw, pw, sizeof(struct passwd));
 
     if ( (grp = getgrnam(mudgroupname)) == NULL ) {
         endgrent();
@@ -134,13 +128,8 @@ static int mud_sess_init()
         return 0;
     }
 
-    if ( (mudgroup = malloc(sizeof (struct group))) != NULL )
-        memcpy( mudgroup, grp, sizeof(struct group) );
-    else {
-        pr_response_add_err( R_451, "Internal server error, giving up." );
-        end_login(1);
-        return 0;
-    }
+    mudgroup = palloc(session.pool, sizeof(struct group));
+    memcpy(mudgroup, grp, sizeof(struct group));
 
     udp_socket = -1;
 
@@ -160,21 +149,7 @@ static int mud_sess_init()
 }
 
 
-static char *sgetsave(char *s)
-{
-    char *new = (char *)malloc( (unsigned) strlen(s) + 1 );
-
-    if ( new == NULL ) {
-        pr_response_add_err( R_421, "Local resource failure: malloc." );
-        end_login(1);
-        /* NOTREACHED */
-    }
-    (void) strcpy( new, s );
-    return (new);
-}
-
-
-static int get_msg ( char *type, char **result, int quick )
+static int get_msg(pool *pool, char *type, char **result, int quick)
 {
     int retries, discard, rc, tlen;
     socklen_t fromlen;
@@ -265,7 +240,7 @@ static int get_msg ( char *type, char **result, int quick )
         rest += 6+tlen;
         if (*rest == '\t')
             rest++;
-        *result = sgetsave(rest);
+        *result = pstrdup(pool, rest);
         return 0;
     }
 
@@ -283,8 +258,8 @@ static int get_msg ( char *type, char **result, int quick )
  * Direct result is 0 on success, -1 on failure.
  */
 
-static int send_msg ( char **result, char *type, char *arg1, char *arg2,
-                      char *arg3 )
+static int send_msg(pool *pool, char **result, char *type,
+                    char *arg1, char *arg2, char *arg3)
 {
     char buf[8192];
     int retries, rc, len;
@@ -327,7 +302,7 @@ static int send_msg ( char **result, char *type, char *arg1, char *arg2,
             continue;
         }
 
-        if ( !get_msg( type, result, 1 ) )
+        if (!get_msg(pool, type, result, 1))
             return 0;
     }
 
@@ -337,37 +312,30 @@ static int send_msg ( char **result, char *type, char *arg1, char *arg2,
 }
 
 
-static struct mudpw *getmudpw( char *name )
+static struct mudpw *getmudpw(pool *pool, char *name )
 {
     struct mudpw *save;
     char *result;
 
-    if ( (save = (struct mudpw *) malloc(sizeof(struct mudpw))) == NULL )
-        return (struct mudpw *)0;
-    if ( NULL == (save->pw.pw_name = (char *)malloc(15)) )
-        return (struct mudpw *)0;
-    if ( NULL == (save->pw.pw_passwd = (char *)malloc(26)) )
-        return (struct mudpw *)0;
-    if ( NULL == (save->pw.pw_dir = (char *)malloc(MAXPATHLEN+1)) )
-        return (struct mudpw *)0;
-    if ( NULL == (save->pw.pw_gecos = (char *)malloc(1)) )
-        return (struct mudpw *)0;
+    save = pcalloc(pool, sizeof(struct mudpw));
+    save->pw.pw_name = pcalloc(pool, 15);
+    save->pw.pw_passwd = pcalloc(pool, 26);
+    save->pw.pw_dir = pcalloc(pool, MAXPATHLEN+1);
+    save->pw.pw_gecos = pcalloc(pool, 1);
     save->pw.pw_shell = NULL;
     save->pw_level = -1;
 
-    strcpy( save->pw.pw_name, name );
+    strncpy(save->pw.pw_name, name, 14);
 
-    if ( !send_msg( &result, "USER", name, NULL, NULL) ) {
+    if (!send_msg(pool, &result, "USER", name, NULL, NULL)) {
         if ( !strncasecmp( "NONE", result, 4 ) ) {
             pr_log_debug( DEBUG1, "mod_mud: getmudpw(%s) rejected by udp", name );
-            free(result);
             return NULL;
         }
 
-        strcpy( save->pw_rdir, result );
-        strcpy( save->pw.pw_dir, save->pw_rdir );
-        strcpy( save->pw.pw_passwd, "dummy" );
-        free(result);
+        strncpy(save->pw_rdir, result, sizeof(save->pw_rdir)-1);
+        strncpy(save->pw.pw_dir, save->pw_rdir, MAXPATHLEN);
+        strncpy(save->pw.pw_passwd, "dummy", 25);
         return save;
     }
 
@@ -463,7 +431,7 @@ static int mud_setup_environment( pool *p, char *user, char *pass )
 
     session.hide_password = TRUE;
 
-    if ( (pw = getmudpw(user)) == NULL ) {
+    if ( (pw = getmudpw(p, user)) == NULL ) {
         log_pri( LOG_NOTICE, "mod_mud: failed login, can't find user '%s'",
                  user );
         return 0;
@@ -625,7 +593,7 @@ static int mud_setup_environment( pool *p, char *user, char *pass )
 
 /* Verify access rights fo a given file. */
 
-static int mud_verify_access( char *dir, int modus )
+static int mud_verify_access(pool *pool, char *dir, int modus)
 {
     char *mode = NULL, *result;
 
@@ -646,15 +614,13 @@ static int mud_verify_access( char *dir, int modus )
         break;
     }
 
-    if ( !send_msg( &result, mode, session.user, dir, NULL ) ) {
+    if (!send_msg(pool, &result, mode, session.user, dir, NULL)) {
         if ( !strncasecmp( "FAIL", result, 4 ) ) {
             pr_response_add_err( R_550, " %s: Permission denied.", dir );
-            free(result);
             return 0;
         }
 
         if ( !strncasecmp( "OK", result, 2 ) ) {
-            free(result);
             return 1;
         }
         else {
@@ -808,16 +774,15 @@ MODRET pw_auth( cmd_rec *cmd )
         /* shortcut */
         return DECLINED(cmd);
 
-    if ( !send_msg( &result, "PASS", (char *)name, (char *)clearpw, NULL ) ) {
+    if (!send_msg(cmd->tmp_pool, &result, "PASS",
+                  (char *)name, (char *)clearpw, NULL)) {
         if ( !strncasecmp( result, "OK", 2 ) ) {
-            free(result);
             /* mud-user identified */
             mud_login |= MU_AUTHENTICATED;
             return HANDLED(cmd);
         }
 
         pr_log_debug( DEBUG1, "mod_mud: auth pw(%s) rejected by udp", name );
-        free(result);
         return DECLINED(cmd);
     }
 
@@ -892,7 +857,7 @@ MODRET mud_cmd_read( cmd_rec *cmd )
         return ERROR(cmd);
     }
 
-    if ( !mud_verify_access(dir, MODE_READ) )
+    if ( !mud_verify_access(cmd->tmp_pool, dir, MODE_READ) )
         return ERROR(cmd);
 
     return DECLINED(cmd);
@@ -914,7 +879,7 @@ MODRET mud_cmd_write( cmd_rec *cmd )
         return ERROR(cmd);
     }
 
-    if ( !mud_verify_access(dir, MODE_WRITE) )
+    if (!mud_verify_access(cmd->tmp_pool, dir, MODE_WRITE))
         return ERROR(cmd);
 
     return DECLINED(cmd);
@@ -936,7 +901,7 @@ MODRET mud_cmd_list( cmd_rec *cmd )
         return ERROR(cmd);
     }
 
-    if ( !mud_verify_access(dir, MODE_LIST) )
+    if (!mud_verify_access(cmd->tmp_pool, dir, MODE_LIST))
         return ERROR(cmd);
 
     return DECLINED(cmd);
@@ -989,7 +954,7 @@ MODRET mud_cmd_reallist( cmd_rec *cmd )
         /* not our job */
         return DECLINED(cmd);
 
-        if (send_msg(&result, "LIST", session.user, dir, NULL)) {
+        if (send_msg(cmd->tmp_pool, &result, "LIST", session.user, dir, NULL)) {
             pr_response_add(R_550, "Error retrieving dirlist '%s'.", dir);
             return ERROR(cmd);
         }
@@ -1020,8 +985,7 @@ MODRET mud_cmd_reallist( cmd_rec *cmd )
             // we can use sendline(fmt, ....)
             sendline("%s", result+5);
             lines++;
-            free(result);
-            if (get_msg("LIST", &result, 0)) {
+            if (get_msg(cmd->tmp_pool, "LIST", &result, 0)) {
                 pr_response_add(R_550, "Error retrieving dirlist for '%s', timeout", dir);
                 break;
             }
@@ -1029,7 +993,6 @@ MODRET mud_cmd_reallist( cmd_rec *cmd )
         if (!XFER_ABORTED) {
             sendline(NULL);
         }
-        free(result);
 
         if (XFER_ABORTED) {
             pr_data_abort(0, 0);

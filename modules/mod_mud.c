@@ -434,7 +434,7 @@ static int mud_setup_environment(pool *p, char *user, char *pass)
     session.hide_password = TRUE;
 
     if ((pw = getmudpw(p, user)) == NULL) {
-        log_pri(LOG_NOTICE, "mod_mud: failed login, can't find user '%s'",
+        pr_log_pri(LOG_NOTICE, "mod_mud: failed login, can't find user '%s'",
                 user);
         return 0;
     }
@@ -446,7 +446,7 @@ static int mud_setup_environment(pool *p, char *user, char *pass)
 
     switch(authcode) {
     case PR_AUTH_NOPWD:
-        log_auth(LOG_NOTICE,
+        pr_log_auth(LOG_NOTICE,
                  "mod_mud: USER %s: no such user found from %s [%s] to %s:%i",
                  user, session.c->remote_name,
                  pr_netaddr_get_ipstr(session.c->remote_addr),
@@ -455,7 +455,7 @@ static int mud_setup_environment(pool *p, char *user, char *pass)
         break;
 
     case PR_AUTH_BADPWD:
-        log_auth(LOG_NOTICE,
+        pr_log_auth(LOG_NOTICE,
                  "mod_mud: USER %s: incorrect password from %s [%s] to %s:%i",
                  user, session.c->remote_name,
                  pr_netaddr_get_ipstr(session.c->remote_addr),
@@ -469,7 +469,7 @@ static int mud_setup_environment(pool *p, char *user, char *pass)
 
     sstrncpy(session.cwd, pw->pw.pw_dir, PR_TUNABLE_PATH_MAX);
 
-    log_auth(LOG_NOTICE, "mod_mud: FTP login as '%s' from %s [%s] to %s:%i",
+    pr_log_auth(LOG_NOTICE, "mod_mud: FTP login as '%s' from %s [%s] to %s:%i",
              user, session.c->remote_name,
              pr_netaddr_get_ipstr(session.c->remote_addr),
              pr_netaddr_get_ipstr(session.c->local_addr),
@@ -487,7 +487,7 @@ static int mud_setup_environment(pool *p, char *user, char *pass)
 
             pr_response_add_err(R_530, "Unable to set default root directory.");
 
-            log_pri(LOG_ERR, "mod_mud: %s chroot(\"%s\"): %s", session.user,
+            pr_log_pri(LOG_ERR, "mod_mud: %s chroot(\"%s\"): %s", session.user,
                     defroot, strerror(errno));
             end_login(1);
             /* NOT REACHED */
@@ -498,7 +498,7 @@ static int mud_setup_environment(pool *p, char *user, char *pass)
     else {
         pr_response_add_err(R_530, "Mud root directory is not set.");
 
-        log_pri(LOG_ERR, "mod_mud: %s mud-chroot(\"%s\"): %s", session.user,
+        pr_log_pri(LOG_ERR, "mod_mud: %s mud-chroot(\"%s\"): %s", session.user,
                 defroot, strerror(errno));
         end_login(1);
         /* NOT REACHED */
@@ -525,7 +525,7 @@ static int mud_setup_environment(pool *p, char *user, char *pass)
         PRIVS_RELINQUISH;
 
         pr_response_add_err(R_530, "Unable to set user privileges.");
-        log_pri(LOG_ERR, "mod_mud: %s setregid() or setreuid(): %s",
+        pr_log_pri(LOG_ERR, "mod_mud: %s setregid() or setreuid(): %s",
                 session.user, strerror(errno));
 
         end_login(1);
@@ -539,7 +539,7 @@ static int mud_setup_environment(pool *p, char *user, char *pass)
 
     if (pr_fsio_chdir_canon(session.cwd, 1) == -1) {
         pr_response_add_err(R_530, "Unable to chdir.");
-        log_pri(LOG_ERR, "mod_mud: %s chdir(\"%s\"): %s", session.user,
+        pr_log_pri(LOG_ERR, "mod_mud: %s chdir(\"%s\"): %s", session.user,
                 session.cwd, strerror(errno));
         end_login(1);
         /* NOT REACHED */
@@ -566,10 +566,10 @@ static int mud_setup_environment(pool *p, char *user, char *pass)
                                PR_SCORE_CWD, session.cwd,
                                NULL);
 
-    log_run_address(session.c->remote_name, session.c->remote_ipaddr);
-    log_run_cwd(session.cwd);
+    pr_log_run_address(session.c->remote_name, session.c->remote_ipaddr);
+    pr_log_run_cwd(session.cwd);
 #endif
-    session_set_idle();
+    pr_session_set_idle();
     pr_timer_remove(PR_TIMER_LOGIN, &auth_module);
 
     session.user = pstrdup(permanent_pool,session.user);
@@ -830,7 +830,7 @@ MODRET mud_cmd_pass(cmd_rec *cmd)
             get_param_ptr(cmd->server->conf, "DisplayLogin", FALSE);
 
         if (display)
-            pr_display_file(R_230, display, NULL);
+            pr_display_file(display, NULL, R_230, 0);
 
         grantmsg = (char *)
             get_param_ptr(cmd->server->conf, "AccessGrantMsg", FALSE);

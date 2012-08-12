@@ -1,15 +1,14 @@
 /*
  * mod_mud.c: mud-user login&file access handling
  *
+ * @author Fuchur@Wunderland
  * @author Holger@Wunderland
  * @author Wolfgang Hamann, wolfgang@blitzstrahl
  * @author Tiamak@MorgenGrauen
  * @author Matthias L. Jugel, MorgenGrauen
  * @author Peng@FinalFrontier (original)
  *
- * v1.6
- *
- * $Id$
+ * v1.7
  */
 
 #include "conf.h"
@@ -70,8 +69,10 @@ static char *sgetsave(char *);
 static int get_msg ( char *, char **, int );
 static int send_msg ( char **, char *, char *, char *, char * );
 static struct mudpw *getmudpw( char * );
+#if 0
 static void build_group_arrays( pool *, struct passwd *, char *,
                                 array_header **, array_header ** );
+#endif
 static int mud_setup_environment( pool *, char *, char * );
 static int mud_verify_access( char *, int );
 static char *mud_getdir( cmd_rec * );
@@ -89,12 +90,14 @@ static int mud_sess_init()
     struct group *grp = NULL;
     struct passwd *pw = NULL;
     char *mudgroupname = NULL;
+    int *udp_portno_ptr;
 
     muduser = (char *)get_param_ptr( main_server->conf, "MudUserName", FALSE );
     mudgroupname = (char *)get_param_ptr( main_server->conf, "MudGroupName",
                                           FALSE );
 
-    udp_portno = get_param_int( main_server->conf, "UDPPortno", FALSE );
+    udp_portno_ptr = get_param_ptr( main_server->conf, "UDPPortno", FALSE );
+    udp_portno = udp_portno_ptr ? *udp_portno_ptr : 0;
  
     if ( udp_portno < 1024 ){
         pr_log_debug( DEBUG1, "mod_mud: UDPPortno must be set.");
@@ -166,7 +169,8 @@ static char *sgetsave(char *s)
 
 static int get_msg ( char *type, char **result, int quick )
 {
-    int retries, discard, rc, fromlen, tlen;
+    int retries, discard, rc, tlen;
+    socklen_t fromlen;
     struct timeval timeout;
     fd_set readfds;
     struct sockaddr_in from_addr;
@@ -356,6 +360,7 @@ static struct mudpw *getmudpw( char *name )
 }
 
 
+#if 0
 static void build_group_arrays( pool *p, struct passwd *xpw, char *name,
                                 array_header **gids, array_header **groups )
 {
@@ -402,6 +407,7 @@ static void build_group_arrays( pool *p, struct passwd *xpw, char *name,
     *gids = xgids;
     *groups = xgroups;
 }
+#endif
 
 // at this point, unix passwords have gone
 static void build_dummy_group_arrays( pool *p, struct passwd *xpw, char *name,
@@ -444,7 +450,7 @@ static int mud_setup_environment( pool *p, char *user, char *pass )
         return 0;
     }
 
-    authcode = auth_authenticate( p, user, pass );
+    authcode = pr_auth_authenticate( p, user, pass );
 
     session.user = pstrdup( p, user );
     session.group = pstrdup( p, mudgroup->gr_name );
@@ -569,29 +575,29 @@ static int mud_setup_environment( pool *p, char *user, char *pass )
 //    log_run_address( session.c->remote_name, session.c->remote_ipaddr );
 //    log_run_cwd(session.cwd);
     session_set_idle();
-    remove_timer( TIMER_LOGIN, &auth_module );
+    pr_timer_remove( PR_TIMER_LOGIN, &auth_module );
 
-  session.user = pstrdup(permanent_pool,session.user);
+    session.user = pstrdup(permanent_pool,session.user);
 
-  if (session.group)
-    session.group = pstrdup(permanent_pool,session.group);
-   pr_log_debug( DEBUG1, "mod_mud: make groups." );
+    if (session.group)
+      session.group = pstrdup(permanent_pool,session.group);
+     pr_log_debug( DEBUG1, "mod_mud: make groups." );
 #if 1
 //    build_group_arrays( session.pool, &pw->pw, NULL,
 //                        &session.gids, &session.groups );
     build_dummy_group_arrays( session.pool, &pw->pw, NULL,
                         &session.gids, &session.groups );
 #else
-  if (session.gids)
-    session.gids = copy_array(permanent_pool, session.gids);
+    if (session.gids)
+      session.gids = copy_array(permanent_pool, session.gids);
 
-  /* session.groups is an array of strings, so we must copy the string data
-   * as well as the pointers.
-   */
-  session.groups = copy_array_str(permanent_pool, session.groups);
-
-  /* Resolve any deferred-resolution paths in the FS layer */
-  pr_resolve_fs_map();
+    /* session.groups is an array of strings, so we must copy the string data
+     * as well as the pointers.
+     */
+    session.groups = copy_array_str(permanent_pool, session.groups);
+  
+    /* Resolve any deferred-resolution paths in the FS layer */
+    pr_resolve_fs_map();
 #endif
    pr_log_debug( DEBUG1, "mod_mud: end setup." );
     return 1;
@@ -695,17 +701,23 @@ static char *mud_getdir( cmd_rec *cmd )
 
 MODRET mud_set_udpport( cmd_rec *cmd )
 {
-    int _portno;
+    int portno;
+    int *portno_ptr;
     
     CHECK_ARGS( cmd, 1 );
     CHECK_CONF( cmd, CONF_ROOT|CONF_GLOBAL );
-    _portno = atoi(cmd->argv[1]);
+    portno = atoi(cmd->argv[1]);
     
-    if ( _portno < 1024 )
+    if ( portno < 1024 )
         CONF_ERROR( cmd, "UDPPortno must be greater than 1024." );
 
-    add_config_param( "UDPPortno", 1, (void *)_portno );
-    udp_portno = _portno;
+    if (NULL == (portno_ptr = pcalloc(main_server->pool, sizeof(int))))
+        return ERROR(cmd);
+
+    *portno_ptr = portno;
+
+    add_config_param( "UDPPortno", 1, (void *)portno_ptr );
+    udp_portno = portno;
     
     return HANDLED(cmd);
 }

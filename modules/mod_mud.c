@@ -405,7 +405,7 @@ static void build_dummy_group_arrays(pool *p, struct passwd *xpw, char *name,
     struct passwd *pw = xpw;
     array_header *xgids, *xgroups;
 
-    xgids = make_array(p, 2, sizeof(int));
+    xgids = make_array(p, 2, sizeof(gid_t));
     xgroups = make_array(p, 2, sizeof(char*));
 
     if (!pw && !name) {
@@ -414,7 +414,7 @@ static void build_dummy_group_arrays(pool *p, struct passwd *xpw, char *name,
         return;
     }
 
-    *((int*) push_array(xgids)) = 300;
+    *((gid_t*) push_array(xgids)) = 300;
     *((char**) push_array(xgroups)) = pstrdup(p, "games");
 
     *gids = xgids;

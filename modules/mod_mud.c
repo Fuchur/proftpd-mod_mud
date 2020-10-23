@@ -55,7 +55,7 @@ static int    udp_portno = 0;
 static int    udp_retries = UDP_RETRIES;
 static int    udp_delay = UDP_DELAY;
 static int    mud_login = 0;        /* mud-user or 'real' user? */
-static char   *muduser;
+static const char *muduser;
 static struct group *mudgroup;
 static struct passwd *muduserpw;    /* it is used for further use of the
                                        muduser data */
@@ -65,16 +65,20 @@ module mud_module;
 /* Declarations */
 
 static int mud_sess_init();
-static int get_msg(pool *, char *, char **, int);
-static int send_msg(pool *, char **, char *, char *, char *, char *);
-static struct mudpw *getmudpw(pool *, char *);
+static int get_msg(pool *, const char *, const char **, int);
+static int send_msg(pool *, const char **, const char *,
+                    const char *, const char *, const char *);
+static struct mudpw *getmudpw(pool *, const char *);
 #if 0
-static void build_group_arrays(pool *, struct passwd *, char *,
+static void build_group_arrays(pool *, struct passwd *, const char *,
                                array_header **, array_header **);
+#else
+static void build_dummy_group_arrays(pool *, struct passwd *, const char *,
+                                     array_header **, array_header **);
 #endif
-static int mud_setup_environment(pool *, char *, char *);
-static int mud_verify_access(pool *, char *, int);
-static char *mud_getdir(cmd_rec *);
+static int mud_setup_environment(pool *, const char *, const char *);
+static int mud_verify_access(pool *, const char *, int);
+static const char *mud_getdir(cmd_rec *);
 
 MODRET mud_set_udpport(cmd_rec *);
 MODRET mud_set_pathmudlib(cmd_rec *);
@@ -88,11 +92,12 @@ static int mud_sess_init()
 {
     struct group *grp = NULL;
     struct passwd *pw = NULL;
-    char *mudgroupname = NULL;
+    const char *mudgroupname = NULL;
     int *udp_portno_ptr;
 
-    muduser = (char *)get_param_ptr(main_server->conf, "MudUserName", FALSE);
-    mudgroupname = (char *)
+    muduser = (const char *)
+        get_param_ptr(main_server->conf, "MudUserName", FALSE);
+    mudgroupname = (const char *)
         get_param_ptr(main_server->conf, "MudGroupName", FALSE);
 
     if (muduser == NULL || mudgroupname == NULL) {
@@ -150,7 +155,7 @@ static int mud_sess_init()
 }
 
 
-static int get_msg(pool *pool, char *type, char **result, int quick)
+static int get_msg(pool *pool, const char *type, const char **result, int quick)
 {
     int retries, discard, rc, tlen;
     socklen_t fromlen;
@@ -179,7 +184,7 @@ static int get_msg(pool *pool, char *type, char **result, int quick)
         if (rc <= 0 || !FD_ISSET(udp_socket, &readfds)) {
             /* timeout or error */
             if (rc < 0)
-                pr_log_debug(DEBUG1, "mod_mud: select() on upd socket: %m");
+                pr_log_debug(DEBUG1, "mod_mud: select() on udp socket: %m");
             else {
                 if (!rc)
                     pr_log_debug(DEBUG5, "mod_mud: select() timed out");
@@ -259,8 +264,8 @@ static int get_msg(pool *pool, char *type, char **result, int quick)
  * Returns 0 on success, -1 on failure.
  */
 
-static int send_msg(pool *pool, char **result, char *type,
-                    char *arg1, char *arg2, char *arg3)
+static int send_msg(pool *pool, const char **result, const char *type,
+                    const char *arg1, const char *arg2, const char *arg3)
 {
     char buf[8192];
     int retries, rc, len;
@@ -314,10 +319,10 @@ static int send_msg(pool *pool, char **result, char *type,
 }
 
 
-static struct mudpw *getmudpw(pool *pool, char *name)
+static struct mudpw *getmudpw(pool *pool, const char *name)
 {
     struct mudpw *save;
-    char *result;
+    const char *result;
 
     save = pcalloc(pool, sizeof(struct mudpw));
     save->pw.pw_name = pcalloc(pool, 15);
@@ -350,16 +355,16 @@ static struct mudpw *getmudpw(pool *pool, char *name)
 
 
 #if 0
-static void build_group_arrays(pool *p, struct passwd *xpw, char *name,
+static void build_group_arrays(pool *p, struct passwd *xpw, const char *name,
                                array_header **gids, array_header **groups)
 {
     struct group *gr;
     struct passwd *pw = xpw;
     array_header *xgids, *xgroups;
-    char **gr_mem;
+    const char **gr_mem;
 
     xgids = make_array(p, 2, sizeof(int));
-    xgroups = make_array(p, 2, sizeof(char*));
+    xgroups = make_array(p, 2, sizeof(char *));
 
     if (!pw && !name) {
         *gids = xgids;
@@ -378,17 +383,17 @@ static void build_group_arrays(pool *p, struct passwd *xpw, char *name,
     }
 
     if ((gr = auth_getgrgid(p, pw->pw_gid)) != NULL)
-        *((char**) push_array(xgroups)) = pstrdup(p, gr->gr_name);
+        *((char **) push_array(xgroups)) = pstrdup(p, gr->gr_name);
 
     auth_setgrent(p);
 
     while ((gr = auth_getgrent(p)) != NULL && gr->gr_mem)
         for (gr_mem = gr->gr_mem; *gr_mem; gr_mem++) {
             if (!strcmp(*gr_mem, pw->pw_name)) {
-                *((int*) push_array(xgids)) = (int) gr->gr_gid;
+                *((int *) push_array(xgids)) = (int) gr->gr_gid;
 
                 if (pw->pw_gid != gr->gr_gid)
-                    *((char**) push_array(xgroups)) = pstrdup(p, gr->gr_name);
+                    *((char **) push_array(xgroups)) = pstrdup(p, gr->gr_name);
                 break;
             }
         }
@@ -396,17 +401,16 @@ static void build_group_arrays(pool *p, struct passwd *xpw, char *name,
     *gids = xgids;
     *groups = xgroups;
 }
-#endif
-
+#else
 /* at this point, unix passwords have gone */
-static void build_dummy_group_arrays(pool *p, struct passwd *xpw, char *name,
+static void build_dummy_group_arrays(pool *p, struct passwd *xpw, const char *name,
                                      array_header **gids, array_header **groups)
 {
     struct passwd *pw = xpw;
     array_header *xgids, *xgroups;
 
     xgids = make_array(p, 2, sizeof(gid_t));
-    xgroups = make_array(p, 2, sizeof(char*));
+    xgroups = make_array(p, 2, sizeof(char *));
 
     if (!pw && !name) {
         *gids = xgids;
@@ -414,19 +418,20 @@ static void build_dummy_group_arrays(pool *p, struct passwd *xpw, char *name,
         return;
     }
 
-    *((gid_t*) push_array(xgids)) = 300;
-    *((char**) push_array(xgroups)) = pstrdup(p, "games");
+    *((gid_t *) push_array(xgids)) = 300;
+    *((char **) push_array(xgroups)) = pstrdup(p, "games");
 
     *gids = xgids;
     *groups = xgroups;
 }
+#endif
 
 
-static int mud_setup_environment(pool *p, char *user, char *pass)
+static int mud_setup_environment(pool *p, const char *user, const char *pass)
 {
     struct mudpw *pw;
     struct stat sbuf;
-    char *defroot = NULL;
+    const char *defroot = NULL;
     int authcode = 0;
 
     /********************* Authenticate the user here *********************/
@@ -476,7 +481,8 @@ static int mud_setup_environment(pool *p, char *user, char *pass)
              session.c->local_port);
 
     /* Now check to see if the user has an applicable DefaultRoot */
-    defroot = (char *)get_param_ptr(main_server->conf, "PathMudlib", FALSE);
+    defroot = (const char *)
+        get_param_ptr(main_server->conf, "PathMudlib", FALSE);
     if (defroot != NULL) {
 
         PRIVS_ROOT;
@@ -603,9 +609,9 @@ static int mud_setup_environment(pool *p, char *user, char *pass)
 
 /* Verify access rights for a given file. */
 
-static int mud_verify_access(pool *pool, char *dir, int modus)
+static int mud_verify_access(pool *pool, const char *dir, int modus)
 {
-    char *mode = NULL, *result;
+    const char *mode = NULL, *result;
 
     if (modus < MODE_READ || modus > MODE_LIST)
         return 0;
@@ -654,10 +660,10 @@ static int mud_verify_access(pool *pool, char *dir, int modus)
 }
 
 
-static char *mud_getdir(cmd_rec *cmd)
+static const char *mud_getdir(cmd_rec *cmd)
 {
     static char target[MAXPATHLEN];
-    char *dir, *user;
+    const char *dir, *user;
 
     if (cmd->argc == 1)
         dir = ".";
@@ -715,7 +721,7 @@ MODRET mud_set_udpport(cmd_rec *cmd)
 
 MODRET mud_set_pathmudlib(cmd_rec *cmd)
 {
-    char *dir;
+    const char *dir;
 
     CHECK_CONF(cmd, CONF_ROOT|CONF_VIRTUAL|CONF_GLOBAL);
     CHECK_ARGS(cmd, 1);
@@ -730,11 +736,11 @@ MODRET mud_set_pathmudlib(cmd_rec *cmd)
 
     if (strchr(dir, '*'))
         CONF_ERROR(cmd, pstrcat(cmd->tmp_pool, "(", dir,
-                                ") wildcards not allowed in pathname."));
+                                ") wildcards not allowed in pathname.", NULL));
 
     if (*(dir + strlen(dir) - 1) == '/')
         CONF_ERROR(cmd, pstrcat(cmd->tmp_pool,
-                                "no / allowed at end of ", dir));
+                                "no / allowed at end of ", dir, NULL));
 
     add_config_param_str("PathMudlib", 1, dir);
 
@@ -742,7 +748,8 @@ MODRET mud_set_pathmudlib(cmd_rec *cmd)
 }
 
 MODRET mud_set_muduser(cmd_rec *cmd)
-{       char *user;
+{
+    const char *user;
 
     CHECK_CONF(cmd, CONF_ROOT|CONF_VIRTUAL|CONF_GLOBAL);
     CHECK_ARGS(cmd, 1);
@@ -755,7 +762,8 @@ MODRET mud_set_muduser(cmd_rec *cmd)
 }
 
 MODRET mud_set_mudgroup(cmd_rec *cmd)
-{       char *group;
+{
+    const char *group;
 
     CHECK_CONF(cmd, CONF_ROOT|CONF_VIRTUAL|CONF_GLOBAL);
     CHECK_ARGS(cmd, 1);
@@ -770,7 +778,7 @@ MODRET mud_set_mudgroup(cmd_rec *cmd)
 
 MODRET pw_auth(cmd_rec *cmd)
 {
-    char *result;
+    const char *result;
     const char *name;
     const char *clearpw;
 
@@ -781,8 +789,7 @@ MODRET pw_auth(cmd_rec *cmd)
         /* shortcut */
         return PR_DECLINED(cmd);
 
-    if (!send_msg(cmd->tmp_pool, &result, "PASS",
-                  (char *)name, (char *)clearpw, NULL)) {
+    if (!send_msg(cmd->tmp_pool, &result, "PASS", name, clearpw, NULL)) {
         if (!strncasecmp(result, "OK", 2)) {
             /* mud-user identified */
             mud_login |= MU_AUTHENTICATED;
@@ -801,11 +808,11 @@ MODRET pw_auth(cmd_rec *cmd)
 
 MODRET mud_cmd_pass(cmd_rec *cmd)
 {
-    char *user;
-    unsigned char *authenticated;
+    const char *user;
+    const char *authenticated;
     int res = 0;
 
-    authenticated = (unsigned char *)
+    authenticated = (const char *)
         get_param_ptr(main_server->conf, "authenticated", FALSE);
     if (authenticated && (*authenticated != FALSE))
         return PR_ERROR_MSG(cmd, R_503, "You are already logged in!");
@@ -823,8 +830,8 @@ MODRET mud_cmd_pass(cmd_rec *cmd)
         config_rec *c = NULL;
 
         c = add_config_param_set(&cmd->server->conf, "authenticated", 1, NULL);
-        c->argv[0] = pcalloc(c->pool, sizeof(unsigned char));
-        *((unsigned char *) c->argv[0]) = TRUE;
+        c->argv[0] = pcalloc(c->pool, sizeof(char));
+        *((char *) c->argv[0]) = TRUE;
 
         set_auth_check(NULL);
 
@@ -840,7 +847,7 @@ MODRET mud_cmd_pass(cmd_rec *cmd)
 
 MODRET mud_cmd_read(cmd_rec *cmd)
 {
-    char *dir = NULL;
+    const char *dir = NULL;
 
     if (!(mud_login & MU_AUTHENTICATED))
         /* not our job */
@@ -862,7 +869,7 @@ MODRET mud_cmd_read(cmd_rec *cmd)
 
 MODRET mud_cmd_write(cmd_rec *cmd)
 {
-    char *dir = NULL;
+    const char *dir = NULL;
 
     if (!(mud_login & MU_AUTHENTICATED))
         /* not our job */
@@ -884,7 +891,7 @@ MODRET mud_cmd_write(cmd_rec *cmd)
 
 MODRET mud_cmd_list(cmd_rec *cmd)
 {
-    char *dir = NULL;
+    const char *dir = NULL;
 
     if (!(mud_login & MU_AUTHENTICATED))
         /* not our job */
@@ -905,7 +912,7 @@ MODRET mud_cmd_list(cmd_rec *cmd)
 
 #if 0
 /* sendline() now has an internal buffer, to help speed up LIST output. */
-static int sendline(char *fmt, ...) {
+static int sendline(const char *fmt, ...) {
     static char listbuf[PR_TUNABLE_BUFFER_SIZE] = {'\0'};
     va_list msg;
     char buf[PR_TUNABLE_BUFFER_SIZE+1] = {'\0'};
@@ -942,9 +949,9 @@ static int sendline(char *fmt, ...) {
 
 MODRET mud_cmd_reallist(cmd_rec *cmd)
 {
-    char *result = NULL;
+    const char *result = NULL;
     int lines, len;
-    char *dir = (cmd->argc > 1) ? cmd->argv[1] : session.cwd;
+    const char *dir = (cmd->argc > 1) ? cmd->argv[1] : session.cwd;
 
     if (!(mud_login & MU_AUTHENTICATED))
         /* not our job */
